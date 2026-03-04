@@ -1,6 +1,9 @@
 import json
 from modules.nlp import ClickbaitDetector, EmotionAnalyzer
 from modules.source import SourceAnalyzer, DateVerifier
+from modules.evidence import EvidenceSearcher
+from modules.profile import ProfileAnalyzer
+from modules.media import MediaAnalyzer
 
 class DisinformationPipeline:
     """
@@ -13,6 +16,9 @@ class DisinformationPipeline:
         self.emotion_analyzer = EmotionAnalyzer()
         self.source_analyzer = SourceAnalyzer()
         self.date_verifier = DateVerifier()
+        self.evidence_searcher = EvidenceSearcher()
+        self.profile_analyzer = ProfileAnalyzer()
+        self.media_analyzer = MediaAnalyzer()
 
     def analyze_post(self, post_data: dict) -> dict:
         """
@@ -45,24 +51,48 @@ class DisinformationPipeline:
             post_data.get("reported_date", "")
         )
 
-        # 5. Calculate Final Trust Score
-        # A simple weighted average for the mock.
+        # 5. Search Evidence
+        evidence_result = self.evidence_searcher.analyze(
+            post_data.get("headline", ""),
+            post_data.get("content", "")
+        )
+
+        # 6. Analyze Profile
+        profile_result = self.profile_analyzer.analyze(
+            post_data.get("user_profile", {})
+        )
+
+        # 7. Analyze Media
+        media_result = self.media_analyzer.analyze(
+            post_data.get("media_url", "")
+        )
+
+        # 8. Calculate Final Trust Score
+        # A simple weighted average for the mock combining all 7 modules.
         # Higher score means MORE likely to be disinformation.
 
         # Source score is reliability (0-1), so we invert it to get "unreliability"
         unreliability_score = 1.0 - source_result["score"]
 
-        # Weights
-        w_source = 0.4
-        w_clickbait = 0.2
-        w_emotion = 0.2
-        w_date = 0.2
+        # Weights (total = 1.0)
+        weights = {
+            "source": 0.20,
+            "clickbait": 0.10,
+            "emotion": 0.10,
+            "date": 0.10,
+            "evidence": 0.25,
+            "profile": 0.10,
+            "media": 0.15
+        }
 
         disinfo_score = (
-            (unreliability_score * w_source) +
-            (clickbait_result["score"] * w_clickbait) +
-            (emotion_result["score"] * w_emotion) +
-            (date_result["score"] * w_date)
+            (unreliability_score * weights["source"]) +
+            (clickbait_result["score"] * weights["clickbait"]) +
+            (emotion_result["score"] * weights["emotion"]) +
+            (date_result["score"] * weights["date"]) +
+            (evidence_result["score"] * weights["evidence"]) +
+            (profile_result["score"] * weights["profile"]) +
+            (media_result["score"] * weights["media"])
         )
 
         # Ensure score is between 0 and 1
@@ -81,10 +111,13 @@ class DisinformationPipeline:
                 "domain": source_result.get("domain", "Unknown")
             },
             "analysis": {
-                "source_reliability": source_result,
-                "clickbait_analysis": clickbait_result,
-                "emotion_analysis": emotion_result,
-                "date_verification": date_result
+                "1_source_reliability": source_result,
+                "2_clickbait_analysis": clickbait_result,
+                "3_emotion_analysis": emotion_result,
+                "4_date_verification": date_result,
+                "5_evidence_search": evidence_result,
+                "6_profile_analysis": profile_result,
+                "7_media_analysis": media_result
             },
             "final_score": {
                 "disinformation_probability": round(disinfo_score, 2),
