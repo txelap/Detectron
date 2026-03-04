@@ -1,93 +1,88 @@
-import requests
 import json
-import time
 from datetime import datetime
+import feedparser
+from bs4 import BeautifulSoup
+import time
 
 class RealWorldDataIngestion:
     """
-    Connects to real-world data sources to fetch live posts.
-    For this prototype, we use public Reddit endpoints (news, conspiracy, etc.)
-    as a proxy for social media feeds containing both reliable and questionable content.
+    Connects to real-world data sources via Public RSS Feeds.
+    Fetches live news and claims from fact-checking and news organizations.
     """
     def __init__(self):
-        # Using a custom User-Agent is required by Reddit's API policy
-        self.headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'}
-
-        # Sources to fetch from.
-        # We will use public APIs that don't block aggressively like Reddit does sometimes
-        # To ensure the demo works reliably, we use Wikipedia's feed as a "reliable" source
-        # and a mock JSON generator for "unreliable" source if needed, or just dummy data if network fails.
+        # We use a mix of reliable news and Fact-Checking sites which often
+        # report on (and quote) disinformation claims circulating on social media.
         self.sources = [
-            'https://en.wikipedia.org/api/rest_v1/feed/featured/2023/10/01' # Mocking a news feed via wiki
+            'http://feeds.bbci.co.uk/news/world/rss.xml',  # Reliable: BBC World
+            'https://www.snopes.com/feed/',               # Fact-checker: Snopes
+            'https://maldita.es/malditobulo/feed/'        # Fact-checker Spanish: Maldita.es
         ]
+
+    def _clean_html(self, raw_html: str) -> str:
+        """Removes HTML tags from RSS content to get plain text."""
+        if not raw_html:
+            return ""
+        soup = BeautifulSoup(raw_html, "html.parser")
+        return soup.get_text(separator=" ").strip()
 
     def fetch_live_posts(self) -> list:
         """
-        Fetches live posts from the defined sources.
+        Fetches live posts from the defined RSS sources.
         Returns a list of dictionaries formatted for the DisinformationPipeline.
         """
-        raw_posts = []
         formatted_posts = []
 
-        print("Fetching live data from real-world sources...")
+        print("Fetching live data from real-world RSS feeds...")
 
         for url in self.sources:
             try:
-                response = requests.get(url, headers=self.headers, timeout=10)
-                if response.status_code == 200:
-                    data = response.json()
-                    raw_posts.append(data)
-                    print(f"  Successfully fetched from: {url}")
+                # feedparser automatically handles HTTP requests safely
+                feed = feedparser.parse(url)
+
+                if feed.entries:
+                    print(f"  Successfully fetched {len(feed.entries[:5])} items from: {url}")
                 else:
-                    print(f"  Failed to fetch from {url}. Status Code: {response.status_code}")
-                # Be polite to the API
-                time.sleep(1)
-            except Exception as e:
-                print(f"  Error fetching from {url}: {e}")
+                    print(f"  Failed or no entries found for: {url}")
 
-        # Convert raw Wikipedia data into the format expected by our Pipeline
-        if not raw_posts:
-            # If the request fails entirely, we ensure raw_posts is iterable
-            pass
+                # We limit to the top 5 most recent posts per feed to keep the demo quick
+                for entry in feed.entries[:5]:
 
-        for item in raw_posts:
-            # Depending on the feed structure
-            if 'tfa' in item: # Today's featured article
-                post = item['tfa']
-                formatted_post = {
-                    "headline": post.get('normalizedtitle', post.get('title', '')),
-                    "content": post.get('extract', ''),
-                    "source_url": post.get('content_urls', {}).get('desktop', {}).get('page', ''),
-                    "media_url": post.get('thumbnail', {}).get('source', ''),
-                    "reported_date": datetime.now().strftime("%Y-%m-%d"),
+                    # Extract text content cleanly
+                    content = entry.get('summary', '')
+                    if 'content' in entry:
+                        content = entry.content[0].value
+                    clean_content = self._clean_html(content)
 
-                    "user_profile": {
-                        "created_at": "2010-01-01",
-                        "followers_count": 10000,
-                        "following_count": 10,
-                        "has_profile_pic": True,
-                        "statuses_count": 1000
-                    }
-                }
-                formatted_posts.append(formatted_post)
+                    # Try to extract an image if available in standard RSS enclosures
+                    media_url = ""
+                    if 'media_content' in entry and len(entry.media_content) > 0:
+                        media_url = entry.media_content[0].get('url', '')
+                    elif 'links' in entry:
+                        for link in entry.links:
+                            if 'image' in link.get('type', ''):
+                                media_url = link.get('href', '')
+                                break
 
-            if 'mostread' in item:
-                for article in item['mostread'].get('articles', [])[:5]:
-                     formatted_post = {
-                        "headline": article.get('normalizedtitle', article.get('title', '')),
-                        "content": article.get('extract', ''),
-                        "source_url": article.get('content_urls', {}).get('desktop', {}).get('page', ''),
-                        "media_url": article.get('thumbnail', {}).get('source', ''),
-                        "reported_date": datetime.now().strftime("%Y-%m-%d"),
+                    formatted_post = {
+                        "headline": entry.get('title', ''),
+                        "content": clean_content[:1000], # Keep first 1000 chars
+                        "source_url": entry.get('link', ''),
+                        "media_url": media_url,
+                        "reported_date": datetime.now().strftime("%Y-%m-%d"), # Assume today if parsing fails
+
+                        # Mock a user profile since RSS doesn't have social profiles
                         "user_profile": {
-                            "created_at": "2010-01-01",
-                            "followers_count": 10000,
-                            "following_count": 10,
+                            "created_at": "2015-01-01",
+                            "followers_count": 100000,
+                            "following_count": 50,
                             "has_profile_pic": True,
-                            "statuses_count": 1000
+                            "statuses_count": 5000
                         }
                     }
-                     formatted_posts.append(formatted_post)
+                    formatted_posts.append(formatted_post)
+
+            except Exception as e:
+                print(f"  Error fetching from {url}: {e}")
 
         print(f"Total live posts fetched and formatted: {len(formatted_posts)}")
         return formatted_posts
